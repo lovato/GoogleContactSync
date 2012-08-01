@@ -16,3 +16,7 @@ One-way and multi-way sync both automatically find and merge duplicate contacts.
 *ContactBroker.py* contains docstrings for each function. *GoogleContactSync.py* contains example instantiation of the broker.
 
 **Don't forget to edit *settings.py* and add accounts as needed.**
+
+Dependencies
+------------
+ * [GData API Python Wrapper](http://code.google.com/p/gdata-python-client/downloads/list)

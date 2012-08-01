@@ -8,6 +8,7 @@ class ContactBroker:
 		self.appname = app_name
 		self.accounts = {}
 		self.client = None
+		self.batch_queue = gdata.contacts.data.ContactsFeed()
 		
 		for account in google_accounts:
 			self.accounts[account.nickname] = account
@@ -41,18 +42,48 @@ class ContactBroker:
 	
 	def SelectAccount(self, nickname):
 		"""Select an account and set it as the current 'working' account
+		Calling this method also cleares the Batch Queue, if it isn't empty
 		
 		Args:
 			nickname: A string corresponding to an account nickname set in settings.py
 		Returns:
 			A boolean value - True was successful, False was unsuccessful
 		"""
+		self.ClearBatchQueue()
+		
 		if nickname in self.accounts:
 			self.current_account = self.accounts[nickname]
 			self.client = self.current_account.client
 			return True
 		else:
 			return False
+	
+	def ClearBatchQueue(self):
+		"""Clear the batch queue"""
+		self.batch_queue = gdata.contacts.data.ContactsFeed()
+	
+	def BatchEnqueue(self, action, contact):
+		"""Add an action to the batch queue
+		
+		Args:
+			action: 'retrieve', 'create', 'update', or 'delete'
+			contact: The ContactEntry object to perform the action on
+		"""
+		
+		if action == 'retrieve':
+			self.batch_queue.AddQuery(entry=contact, batch_id_string='retrieve')
+		elif action == 'create':
+			contact.group_membership_info = [gdata.contacts.data.GroupMembershipInfo(href=self.GetFirstGroupId())]
+			self.batch_queue.AddInsert(entry=contact, batch_id_string='create')
+		elif action == 'update':
+			self.batch_queue.AddUpdate(entry=contact, batch_id_string='update')
+		elif action == 'delete':
+			self.batch_queue.AddDelete(entry=contact, batch_id_string='delete')
+	
+	def ExecuteBatchQueue(self):
+		"""Execute all actions in the batch queue"""
+		self.client.ExecuteBatch(self.batch_queue, 'https://www.google.com/m8/feeds/contacts/default/full/batch')
+		self.ClearBatchQueue();
 	
 	##
 	# Note: Methods below this point act on the currently selected account
@@ -130,7 +161,8 @@ class ContactBroker:
 		contacts = self.GetContactList()
 		
 		for contact in contacts:
-			self.RemoveContact(contact)
+			self.BatchEnqueue('delete', contact)
+		self.ExecuteBatchQueue()
 	
 	def MergeContacts(self, contact1, contact2):
 		"""Merges two contacts
@@ -143,8 +175,9 @@ class ContactBroker:
 		"""
 		contact3 = ceMerge(contact1, contact2)
 		
-		self.client.Update(contact3)
-		self.RemoveContact(contact2)
+		self.BatchEnqueue('update', contact3)
+		self.BatchEnqueue('delete', contact2)
+		self.ExecuteBatchQueue()
 	
 	def FindAndMergeDuplicates(self):
 		pass
@@ -168,7 +201,8 @@ class ContactBroker:
 		
 		self.SelectAccount(to_nickname)
 		for contact in contacts:
-			self.AddContact(contact)
+			self.BatchEnqueue('create', contact)
+		self.ExecuteBatchQueue()
 		
 	def MoveContacts(self, from_nickname, to_nickname):
 		"""Move all contacts from one account to another
@@ -186,12 +220,14 @@ class ContactBroker:
 		# Copy contacts -before- deleting
 		self.SelectAccount(to_nickname)
 		for contact in contacts:
-			self.AddContact(contact)
+			self.BatchEnqueue('create', contact)
+		self.ExecuteBatchQueue()
 		
 		# Then delete
 		self.SelectAccount(from_nickname)
 		for contact in contacts:
-			self.RemoveContact(contact)
+			self.BatchEnqueue('delete', contact)
+		self.ExecuteBatchQueue()
 	
 	def OneWaySync(self, from_nickname, to_nickname):
 		"""Perform a one-way sync: from_nickname --> to_nickname
@@ -220,18 +256,21 @@ class ContactBroker:
 		
 		for contact in todelete:
 			if ceIsOrigin(contact, self.current_account.email):
-				self.RemoveContact(contact)
+				self.BatchEnqueue('delete', contact)
+		self.ExecuteBatchQueue()
 		
 		self.SelectAccount(to_nickname)
 		for contact in contacts:
 			if not ceIsOrigin(contact, self.current_account.email):
-				self.AddContact(contact)
+				self.BatchEnqueue('create', contact)
+		self.ExecuteBatchQueue()
 		
 		for contact in merged:
 			if ceIsOrigin(contact, self.current_account.email):
-				self.client.Update(contact)
+				self.BatchEnqueue('update', contact)
 			else:
-				self.AddContact(contact)
+				self.BatchEnqueue('create', contact)
+		self.ExecuteBatchQueue()
 	
 	def MultiWaySync(self, accounts):
 		"""Perform a multi-way sync between given accounts
@@ -261,4 +300,5 @@ class ContactBroker:
 		for account in accounts:
 			self.SelectAccount(account)
 			for contact in cleaned_contacts:
-				self.AddContact(contact)
+				self.BatchEnqueue('create', contact)
+			self.ExecuteBatchQueue()
